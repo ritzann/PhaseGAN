@@ -1,6 +1,11 @@
 import argparse
 from datetime import datetime
 import os
+
+# For syntactical adjustments compatible with PyTorch 2.x, argparse.SUPPRESS has been used to suppress the default help message
+# Alsom. self.cwd is formatted using an f-string
+# The type=list with nargs='+' for the image_stats argument to directly accept a list of floats
+
 class ParamOptions():
     """This class defines options used during both training and test time."""
     def __init__(self):
@@ -11,9 +16,13 @@ class ParamOptions():
     def initialize(self,parser):
         parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
                             help='unpaired phase reconstruction using propagation-enhanced cycle-consistent adversarial network')
-        parser.add_argument('--load_path', type=str, default = '{self.cwd}/dataset/IMGS', help='path to training h5 files (should have a subfolder named test') # Change training path here
-        parser.add_argument('--run_path', type=str, default = F'{self.cwd}/results/fig', help='path to save results')
-        parser.add_argument('--run_name', type=str, default = self.time.strftime('%b%d_%H_%M'), help='folder name of this run') #TODO: modify save_path and run_name
+        parser.add_argument('--load_path', type=str, default=f'{self.cwd}/dataset/IMGS', help='path to training h5 files (should have a subfolder named test') # Change training path here
+        parser.add_argument('--run_path', type=str, default=f'{self.cwd}/results/fig', help='path to save results')
+        parser.add_argument('--run_name', type=str, default=self.time.strftime('%b%d_%H_%M'), help='folder name of this run') #TODO: modify save_path and run_name
+        parser.add_argument('--run_load_name', type=str, default = self.time.strftime('%b%d_%H_%M'), help='folder name of this run') #TODO: modify save_path and run_name
+        parser.add_argument('--load_weights', type=str, default = 'False', help='folder name of this run') #TODO: modify save_path and run_name
+        parser.add_argument('--model_A', type=str, default = 'UNet', help='detector-plane generator model')
+        parser.add_argument('--model_B', type=str, default = 'UNet', help='detector-plane generator model')
         parser.add_argument('--batch_size', '-b', type=int, default=10, help='input batch size')
         parser.add_argument('--lambda_GA', type=float, default=1.0, help='weight for adversarial loss of generator A')
         parser.add_argument('--lambda_GB', type=float, default=1.0, help='weight for adversarial loss of generator B')
@@ -28,9 +37,9 @@ class ParamOptions():
         parser.add_argument('--num_epochs','-n', type=int, default=100, help='total number of epochs')
         parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
         parser.add_argument('--clip_max', type=float, default=1.0, help='maximum value for the gradient clipping, set to 0 if do not want to use gradient clipping.')
-        parser.add_argument('--image_stats', type=list,default=[0,1,0,1,0,1],
+        parser.add_argument('--image_stats', nargs='+', type=float, default=[0,1,0,1,0,1],
                             help='statistics of training images written as [real_A_mean, real_A_std, real_B_ch1_mean, real_B_ch1_std, real_B_ch2_mean, real_B_ch2_std]')
-        parser.add_argument('--energy', type = float, default=12.4, help='X-ray photon energy in keV')
+        parser.add_argument('--energy', type=float, default=12.4, help='X-ray photon energy in keV')
         parser.add_argument('--pxs', type=float, default=1e-6, help='pixel size')
         parser.add_argument('--z', type=float, default=0.1, help='propagation distance')
         parser.add_argument('--adjust_lr_epoch', type=int, default=30, help='set the learning rate to the initial learning rate decayed by 10 every certain epochs')
