@@ -19,12 +19,12 @@ class Propagator():
         angle = -pi*lamda*z*f2
         H_real = torch.cos(angle)
         H_imag = torch.sin(angle)
-        D1 = torch.fft(self.batch_ifftshift2d(Di),signal_ndim=2)
+        D1 = torch.fft.fft2(self.batch_ifftshift2d(Di))
         D1_real,D1_imag = torch.unbind(D1,-1)
         DH_real =D1_real*H_real - D1_imag*H_imag
         DH_imag = D1_real*H_imag + D1_imag*H_real
         DH = torch.stack((DH_real,DH_imag),-1)
-        Do = self.batch_fftshift2d(torch.ifft(DH,signal_ndim=2))
+        Do = self.batch_fftshift2d(torch.fft.ifft2(DH))
         Do_real,Do_imag = torch.unbind(Do,-1)
         Idet = Do_real**2 + Do_imag**2
         return Idet

@@ -140,6 +140,11 @@ class TrainModel(ABC):
         self.r_index = torch.randperm(self.batch_size)
         self.images, self.reals,self.imags = [input[i].to(self.device,dtype=torch.float) for i in range(3)]
         self.real_A = (self.images.to(self.device) - self.images_mean)/self.images_std
+        print("A", self.r_index.shape)
+        print("B", self.r_index)
+        print("C", self.reals.shape)
+        print("C", self.imags.shape)
+        # print("C", self.reals[self.r_index][:, :])
         self.real_B_re_rc = self.reals[self.r_index][:, :].to(self.device)
         self.real_B_im_rc = self.imags[self.r_index][:, :].to(self.device)
         self.real_B_ph = torch.atan2(self.real_B_im_rc, self.real_B_re_rc).unsqueeze(1)
@@ -187,8 +192,8 @@ class TrainModel(ABC):
         map = X ** 2 + Y ** 2
         index = torch.round(torch.sqrt(map.float()))
         r = torch.arange(0, rnyquist + 1).to(self.device)
-        F1 = torch.rfft(img1, 2, onesided=False).permute(1, 2, 0, 3)
-        F2 = torch.rfft(img2, 2, onesided=False).permute(1, 2, 0, 3)
+        F1 = torch.fft.rfft2(img1).permute(1, 2, 0, 3)
+        F2 = torch.fft.rfft2(img2).permute(1, 2, 0, 3)
         C_r,C1,C2,C_i = [torch.empty(rnyquist + 1, self.batch_size).to(self.device) for i in range(4)]
         for ii in r:
             auxF1 = F1[torch.where(index == ii)]
