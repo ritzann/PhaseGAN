@@ -11,6 +11,7 @@ from models.discriminator import NLayerDiscriminator
 from models.initialization import init_weights
 from dataset.Dataset2channel import *
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
 class TrainModel(ABC):
     def __init__(self,opt):
@@ -140,11 +141,6 @@ class TrainModel(ABC):
         self.r_index = torch.randperm(self.batch_size)
         self.images, self.reals,self.imags = [input[i].to(self.device,dtype=torch.float) for i in range(3)]
         self.real_A = (self.images.to(self.device) - self.images_mean)/self.images_std
-        print("A", self.r_index.shape)
-        print("B", self.r_index)
-        print("C", self.reals.shape)
-        print("C", self.imags.shape)
-        # print("C", self.reals[self.r_index][:, :])
         self.real_B_re_rc = self.reals[self.r_index][:, :].to(self.device)
         self.real_B_im_rc = self.imags[self.r_index][:, :].to(self.device)
         self.real_B_ph = torch.atan2(self.real_B_im_rc, self.real_B_re_rc).unsqueeze(1)
@@ -173,7 +169,7 @@ class TrainModel(ABC):
         return layers_B_ph, layers_B_rc
 
     def standard_prop_basic(self, img):
-        prop_rc = Propagator(self.opt).fresnel_prop(img.squeeze())
+        prop_rc = Propagator(self.opt).fresnel_prop(img)
         prop = (prop_rc - self.images_mean) / self.images_std
         prop = prop.unsqueeze(1)
         return prop
@@ -207,6 +203,9 @@ class TrainModel(ABC):
         FRCm = 1 - torch.where(FRC != FRC, torch.tensor(1.0, device=self.device), FRC)
         My_FRCloss = torch.mean((FRCm) ** 2)
         return My_FRCloss
+    
+    def MSELoss(self, img1, img2):
+        return F.mse_loss(img1, img2)
 
     def plot_cycle(self, img_idx,save_name, layer=0, test=False, plot_phase=True):
         """set layer to 1 and plot_phase to False to plot imag channel"""
@@ -273,14 +272,30 @@ class TrainModel(ABC):
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * self.lambda_B
         self.loss_G_B = self.GANLoss(self.netD_B(self.fake_A), True) * self.lambda_GB
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * self.lambda_A
-        self.loss_fscA = self.lambda_fscA * self.FRCLoss(self.rec_A.squeeze(), self.real_A.squeeze())
+        self.loss_fscA = self.lambda_fscA * self.MSELoss(self.rec_A.squeeze(), self.real_A.squeeze())
         self.loss_fscB = self.lambda_fscB / 2 * (
-                self.FRCLoss(self.rec_B[:, 0, :, :].squeeze(), self.real_B[:, 0, :, :].squeeze()) + self.FRCLoss(
-            self.rec_B[:, 1, :, :].squeeze(),  self.real_B[:, 1, :, :].squeeze()))
+        self.MSELoss(self.rec_B[:, 0, :, :].squeeze(), self.real_B[:, 0, :, :].squeeze()) + 
+        self.MSELoss(self.rec_B[:, 1, :, :].squeeze(), self.real_B[:, 1, :, :].squeeze())
+    )
+    
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_fscA + self.loss_fscB
         self.loss_G.backward()
         if self.clip_max != 0:
             nn.utils.clip_grad_norm_(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), self.clip_max)
+    
+    # def backward_G(self):
+    #     self.loss_G_A = self.GANLoss(self.netD_A(self.fake_B), True) * self.lambda_GA
+    #     self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * self.lambda_B
+    #     self.loss_G_B = self.GANLoss(self.netD_B(self.fake_A), True) * self.lambda_GB
+    #     self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * self.lambda_A
+    #     self.loss_fscA = self.lambda_fscA * self.FRCLoss(self.rec_A.squeeze(), self.real_A.squeeze())
+    #     self.loss_fscB = self.lambda_fscB / 2 * (
+    #             self.FRCLoss(self.rec_B[:, 0, :, :].squeeze(), self.real_B[:, 0, :, :].squeeze()) + self.FRCLoss(
+    #         self.rec_B[:, 1, :, :].squeeze(),  self.real_B[:, 1, :, :].squeeze()))
+    #     self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_fscA + self.loss_fscB
+    #     self.loss_G.backward()
+    #     if self.clip_max != 0:
+    #         nn.utils.clip_grad_norm_(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), self.clip_max)
 
     def forward(self):
         self.fake_B = self.netG_A(self.real_A)

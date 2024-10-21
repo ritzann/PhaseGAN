@@ -14,7 +14,7 @@ class ParamOptions():
         parser.add_argument('--load_path', type=str, default = '{self.cwd}/dataset/IMGS', help='path to training h5 files (should have a subfolder named test') # Change training path here
         parser.add_argument('--run_path', type=str, default = F'{self.cwd}/results/fig', help='path to save results')
         parser.add_argument('--run_name', type=str, default = self.time.strftime('%b%d_%H_%M'), help='folder name of this run') #TODO: modify save_path and run_name
-        parser.add_argument('--batch_size', '-b', type=int, default=10, help='input batch size')
+        parser.add_argument('--batch_size', '-b', type=int, default=1, help='input batch size')
         parser.add_argument('--lambda_GA', type=float, default=1.0, help='weight for adversarial loss of generator A')
         parser.add_argument('--lambda_GB', type=float, default=1.0, help='weight for adversarial loss of generator B')
         parser.add_argument('--lambda_FSCA', type=float, default=10.0, help='weight for Fourier ring correlation loss A')

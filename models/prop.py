@@ -15,20 +15,16 @@ class Propagator():
         fx = (torch.cat((torch.arange(0,n2/2),torch.arange(-n2/2,0)))).to(self.device)/pxs/n2
         fy = (torch.cat((torch.arange(0,n1/2),torch.arange(-n1/2,0)))).to(self.device)/pxs/n1
         fx,fy = torch.meshgrid(fx,fy)
-        f2 = fx**2 + fy**2
+        f2 = fx*2 + fy*2
         angle = -pi*lamda*z*f2
-        H_real = torch.cos(angle)
-        H_imag = torch.sin(angle)
-        D1 = torch.fft.fft2(self.batch_ifftshift2d(Di))
-        D1_real,D1_imag = torch.unbind(D1,-1)
-        DH_real =D1_real*H_real - D1_imag*H_imag
-        DH_imag = D1_real*H_imag + D1_imag*H_real
-        DH = torch.stack((DH_real,DH_imag),-1)
-        Do = self.batch_fftshift2d(torch.fft.ifft2(DH))
-        Do_real,Do_imag = torch.unbind(Do,-1)
-        Idet = Do_real**2 + Do_imag**2
+        H = torch.exp(1j*angle)
+        Din = Di[:,:,:,0] + 1j*Di[:,:,:,1]
+        d = torch.fft.ifftshift(Din)
+        temp = torch.fft.fft2(d) * H
+        Do = torch.fft.fftshift(torch.fft.ifft2(temp))
+        Idet = torch.abs(Do * torch.conj(Do))
         return Idet
-
+    
     def roll_n(self,X, axis, n):
         f_idx = tuple(slice(None, None, None) if i != axis else slice(0, n, None) for i in range(X.dim()))
         b_idx = tuple(slice(None, None, None) if i != axis else slice(n, None, None) for i in range(X.dim()))
