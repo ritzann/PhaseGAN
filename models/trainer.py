@@ -179,33 +179,55 @@ class TrainModel(ABC):
         loss = self.criterionBSE(pred, target)
         return loss
 
-    def FRCLoss(self, img1, img2):
-        nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
+#     def FRCLoss(self, img1, img2):
+#         nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
+#         rnyquist = nx//2
+#         x = torch.cat((torch.arange(0, nx / 2), torch.arange(-nx / 2, 0))).to(self.device)
+#         y = x
+#         X, Y = torch.meshgrid(x, y)
+#         map = X ** 2 + Y ** 2
+#         index = torch.round(torch.sqrt(map.float()))
+#         r = torch.arange(0, rnyquist + 1).to(self.device)
+#         F1 = torch.fft.rfft2(img1).permute(1, 2, 0, 3)
+#         F2 = torch.fft.rfft2(img2).permute(1, 2, 0, 3)
+#         C_r,C1,C2,C_i = [torch.empty(rnyquist + 1, self.batch_size).to(self.device) for i in range(4)]
+#         for ii in r:
+#             auxF1 = F1[torch.where(index == ii)]
+#             auxF2 = F2[torch.where(index == ii)]
+#             C_r[ii] = torch.sum(auxF1[:, :, 0] * auxF2[:, :, 0] + auxF1[:, :, 1] * auxF2[:, :, 1], axis=0)
+#             C_i[ii] = torch.sum(auxF1[:, :, 1] * auxF2[:, :, 0] - auxF1[:, :, 0] * auxF2[:, :, 1], axis=0)
+#             C1[ii] = torch.sum(auxF1[:, :, 0] ** 2 + auxF1[:, :, 1] ** 2, axis=0)
+#             C2[ii] = torch.sum(auxF2[:, :, 0] ** 2 + auxF2[:, :, 1] ** 2, axis=0)
+
+#         FRC = torch.sqrt(C_r ** 2 + C_i ** 2) / torch.sqrt(C1 * C2)
+#         FRCm = 1 - torch.where(FRC != FRC, torch.tensor(1.0, device=self.device), FRC)
+#         My_FRCloss = torch.mean((FRCm) ** 2)
+#         return My_FRCloss
+    
+    def MSELoss(self, img1, img2):
+        layer,nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
         rnyquist = nx//2
         x = torch.cat((torch.arange(0, nx / 2), torch.arange(-nx / 2, 0))).to(self.device)
         y = x
         X, Y = torch.meshgrid(x, y)
         map = X ** 2 + Y ** 2
         index = torch.round(torch.sqrt(map.float()))
-        r = torch.arange(0, rnyquist + 1).to(self.device)
-        F1 = torch.fft.rfft2(img1).permute(1, 2, 0, 3)
-        F2 = torch.fft.rfft2(img2).permute(1, 2, 0, 3)
-        C_r,C1,C2,C_i = [torch.empty(rnyquist + 1, self.batch_size).to(self.device) for i in range(4)]
+        r = torch.arange(0, rnyquist+1).to(self.device)
+        F1 = torch.fft.fft2(img1).permute(1, 2, 0, 3)
+        F2 = torch.fft.fft2(img2).permute(1, 2, 0, 3)
+        MSE_frequency = torch.empty(rnyquist + 1, self.batch_size).to(self.device)
         for ii in r:
+            F1 = F1.squeeze()
+            F2 = F2.squeeze()
             auxF1 = F1[torch.where(index == ii)]
             auxF2 = F2[torch.where(index == ii)]
-            C_r[ii] = torch.sum(auxF1[:, :, 0] * auxF2[:, :, 0] + auxF1[:, :, 1] * auxF2[:, :, 1], axis=0)
-            C_i[ii] = torch.sum(auxF1[:, :, 1] * auxF2[:, :, 0] - auxF1[:, :, 0] * auxF2[:, :, 1], axis=0)
-            C1[ii] = torch.sum(auxF1[:, :, 0] ** 2 + auxF1[:, :, 1] ** 2, axis=0)
-            C2[ii] = torch.sum(auxF2[:, :, 0] ** 2 + auxF2[:, :, 1] ** 2, axis=0)
+            squared_diff = (auxF1 - auxF2) ** 2
+            squared_magnitude_diff = torch.sum(squared_diff)
 
-        FRC = torch.sqrt(C_r ** 2 + C_i ** 2) / torch.sqrt(C1 * C2)
-        FRCm = 1 - torch.where(FRC != FRC, torch.tensor(1.0, device=self.device), FRC)
-        My_FRCloss = torch.mean((FRCm) ** 2)
-        return My_FRCloss
-    
-    def MSELoss(self, img1, img2):
-        return F.mse_loss(img1, img2)
+            # Calculate MSE for the current radius
+            MSE_frequency[ii] = squared_magnitude_diff / auxF1.shape[0]
+        frequency_MSE_loss = torch.mean(MSE_frequency)
+        return frequency_MSE_loss
 
     def plot_cycle(self, img_idx,save_name, layer=0, test=False, plot_phase=True):
         """set layer to 1 and plot_phase to False to plot imag channel"""
@@ -272,12 +294,12 @@ class TrainModel(ABC):
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * self.lambda_B
         self.loss_G_B = self.GANLoss(self.netD_B(self.fake_A), True) * self.lambda_GB
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * self.lambda_A
-        self.loss_fscA = self.lambda_fscA * self.MSELoss(self.rec_A.squeeze(), self.real_A.squeeze())
+        self.loss_fscA = self.lambda_fscA * self.MSELoss(self.rec_A, self.real_A) 
+        self.rec_B1, self.rec_B2 = torch.split(self.rec_B, 1, dim=1)
+        self.real_B1, self.real_B2 = torch.split(self.real_B, 1, dim=1)
         self.loss_fscB = self.lambda_fscB / 2 * (
-        self.MSELoss(self.rec_B[:, 0, :, :].squeeze(), self.real_B[:, 0, :, :].squeeze()) + 
-        self.MSELoss(self.rec_B[:, 1, :, :].squeeze(), self.real_B[:, 1, :, :].squeeze())
+        self.MSELoss(self.rec_B1, self.real_B1) + self.MSELoss(self.rec_B2, self.real_B2)
     )
-    
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_fscA + self.loss_fscB
         self.loss_G.backward()
         if self.clip_max != 0:
