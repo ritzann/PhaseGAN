@@ -12,6 +12,12 @@ from models.initialization import init_weights
 from dataset.Dataset2channel import *
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+import csv
+from skimage.metrics import structural_similarity as ssim
+from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import mean_squared_error as mse
+import matplotlib.patches as patches
+from matplotlib.gridspec import GridSpec
 
 class TrainModel(ABC):
     def __init__(self,opt):
@@ -26,6 +32,8 @@ class TrainModel(ABC):
         self.lambda_B = opt.lambda_B
         self.lambda_fscA = opt.lambda_FSCA
         self.lambda_fscB = opt.lambda_FSCB
+        #self.lambda_fscA = 0
+        #self.lambda_fscB = 0
         self.pretrained = not opt.no_pretrain
         self.num_epochs = opt.num_epochs
         self.lr_g = opt.lr_g
@@ -51,6 +59,7 @@ class TrainModel(ABC):
         self.save_stats = F"{self.save_run}/stats.txt"
         self.loss_names = ['D_A', 'G_A', 'cycle_A', 'D_B', 'G_B', 'cycle_B','fscA','fscB']
         self.img_names = ['real_A', 'fake_B', 'prop_A', 'rec_A', 'real_B', 'prop_B', 'fake_A', 'rec_B']
+        self.losses_file = "training_losses.csv"
 
     def get_current_losses(self):
         errors_list = OrderedDict()
@@ -73,6 +82,30 @@ class TrainModel(ABC):
         print(message)
         with open(self.save_log, "a") as f:
             print(message,file=f)
+            
+        # Check and clear the file only once at the beginning
+        if not hasattr(self, '_file_initialized'):  # Check if the file initialization flag is set
+            # Clear the file if it exists and is not empty
+            if os.path.exists(self.losses_file):
+                with open(self.losses_file, "w") as file:
+                    file.truncate(0)  # Clear the file content
+            self._file_initialized = True  # Mark the file as initialized
+            
+        # Save the losses in a CSV file
+        write_header = not hasattr(self, '_csv_header_written')  # Check if the header is written
+        with open(self.losses_file, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            
+            # Write the header once
+            if write_header:
+                writer.writerow(["Epoch", "Step"] + list(losses.keys()))
+                self._csv_header_written = True  # Mark that the header is written
+            
+            # Round the losses to 3 decimal places and write them to the CSV
+            rounded_losses = [round(loss, 3) for loss in losses.values()]
+            
+            # Write the current losses along with epoch and step
+            writer.writerow([epoch + 1, iters + 1] + rounded_losses)
 
     def adjust_learning_rate(self, epoch, optimizer, initial_lr):
         """Sets the learning rate to the initial LR decayed by 10 every 5 epochs"""
@@ -179,55 +212,30 @@ class TrainModel(ABC):
         loss = self.criterionBSE(pred, target)
         return loss
 
-#     def FRCLoss(self, img1, img2):
-#         nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
-#         rnyquist = nx//2
-#         x = torch.cat((torch.arange(0, nx / 2), torch.arange(-nx / 2, 0))).to(self.device)
-#         y = x
-#         X, Y = torch.meshgrid(x, y)
-#         map = X ** 2 + Y ** 2
-#         index = torch.round(torch.sqrt(map.float()))
-#         r = torch.arange(0, rnyquist + 1).to(self.device)
-#         F1 = torch.fft.rfft2(img1).permute(1, 2, 0, 3)
-#         F2 = torch.fft.rfft2(img2).permute(1, 2, 0, 3)
-#         C_r,C1,C2,C_i = [torch.empty(rnyquist + 1, self.batch_size).to(self.device) for i in range(4)]
-#         for ii in r:
-#             auxF1 = F1[torch.where(index == ii)]
-#             auxF2 = F2[torch.where(index == ii)]
-#             C_r[ii] = torch.sum(auxF1[:, :, 0] * auxF2[:, :, 0] + auxF1[:, :, 1] * auxF2[:, :, 1], axis=0)
-#             C_i[ii] = torch.sum(auxF1[:, :, 1] * auxF2[:, :, 0] - auxF1[:, :, 0] * auxF2[:, :, 1], axis=0)
-#             C1[ii] = torch.sum(auxF1[:, :, 0] ** 2 + auxF1[:, :, 1] ** 2, axis=0)
-#             C2[ii] = torch.sum(auxF2[:, :, 0] ** 2 + auxF2[:, :, 1] ** 2, axis=0)
-
-#         FRC = torch.sqrt(C_r ** 2 + C_i ** 2) / torch.sqrt(C1 * C2)
-#         FRCm = 1 - torch.where(FRC != FRC, torch.tensor(1.0, device=self.device), FRC)
-#         My_FRCloss = torch.mean((FRCm) ** 2)
-#         return My_FRCloss
-    
-    def MSELoss(self, img1, img2):
-        layer,nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
+    def FRCLoss(self, img1, img2):
+        nz,nx,ny= [torch.tensor(i, device=self.device) for i in img1.shape]
         rnyquist = nx//2
         x = torch.cat((torch.arange(0, nx / 2), torch.arange(-nx / 2, 0))).to(self.device)
         y = x
         X, Y = torch.meshgrid(x, y)
         map = X ** 2 + Y ** 2
         index = torch.round(torch.sqrt(map.float()))
-        r = torch.arange(0, rnyquist+1).to(self.device)
-        F1 = torch.fft.fft2(img1).permute(1, 2, 0, 3)
-        F2 = torch.fft.fft2(img2).permute(1, 2, 0, 3)
-        MSE_frequency = torch.empty(rnyquist + 1, self.batch_size).to(self.device)
+        r = torch.arange(0, rnyquist + 1).to(self.device)
+        F1 = torch.view_as_real(torch.fft.fft2(img1)).permute(1, 2, 0, 3)
+        F2 = torch.view_as_real(torch.fft.fft2(img2)).permute(1, 2, 0, 3)
+        C_r,C1,C2,C_i = [torch.empty(rnyquist + 1, self.batch_size).to(self.device) for i in range(4)]
         for ii in r:
-            F1 = F1.squeeze()
-            F2 = F2.squeeze()
             auxF1 = F1[torch.where(index == ii)]
             auxF2 = F2[torch.where(index == ii)]
-            squared_diff = (auxF1 - auxF2) ** 2
-            squared_magnitude_diff = torch.sum(squared_diff)
+            C_r[ii] = torch.sum(auxF1[:, :, 0] * auxF2[:, :, 0] + auxF1[:, :, 1] * auxF2[:, :, 1], axis=0)
+            C_i[ii] = torch.sum(auxF1[:, :, 1] * auxF2[:, :, 0] - auxF1[:, :, 0] * auxF2[:, :, 1], axis=0)
+            C1[ii] = torch.sum(auxF1[:, :, 0] ** 2 + auxF1[:, :, 1] ** 2, axis=0)
+            C2[ii] = torch.sum(auxF2[:, :, 0] ** 2 + auxF2[:, :, 1] ** 2, axis=0)
 
-            # Calculate MSE for the current radius
-            MSE_frequency[ii] = squared_magnitude_diff / auxF1.shape[0]
-        frequency_MSE_loss = torch.mean(MSE_frequency)
-        return frequency_MSE_loss
+        FRC = torch.sqrt(C_r ** 2 + C_i ** 2) / torch.sqrt(C1 * C2)
+        FRCm = 1 - torch.where(FRC != FRC, torch.tensor(1.0, device=self.device), FRC)
+        My_FRCloss = torch.mean((FRCm) ** 2)
+        return My_FRCloss
 
     def plot_cycle(self, img_idx,save_name, layer=0, test=False, plot_phase=True):
         """set layer to 1 and plot_phase to False to plot imag channel"""
@@ -294,17 +302,18 @@ class TrainModel(ABC):
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * self.lambda_B
         self.loss_G_B = self.GANLoss(self.netD_B(self.fake_A), True) * self.lambda_GB
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * self.lambda_A
-        self.loss_fscA = self.lambda_fscA * self.MSELoss(self.rec_A, self.real_A) 
-        self.rec_B1, self.rec_B2 = torch.split(self.rec_B, 1, dim=1)
-        self.real_B1, self.real_B2 = torch.split(self.real_B, 1, dim=1)
+        self.loss_fscA = self.lambda_fscA * self.FRCLoss(self.rec_A.squeeze(1), self.real_A.squeeze(1))
         self.loss_fscB = self.lambda_fscB / 2 * (
-        self.MSELoss(self.rec_B1, self.real_B1) + self.MSELoss(self.rec_B2, self.real_B2)
+        self.FRCLoss(self.rec_B[:, 0, :, :].squeeze(1), self.real_B[:, 0, :, :].squeeze(1)) + 
+        self.FRCLoss(self.rec_B[:, 1, :, :].squeeze(1), self.real_B[:, 1, :, :].squeeze(1))
     )
+    
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_fscA + self.loss_fscB
         self.loss_G.backward()
         if self.clip_max != 0:
             nn.utils.clip_grad_norm_(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), self.clip_max)
-    
+
+
     # def backward_G(self):
     #     self.loss_G_A = self.GANLoss(self.netD_A(self.fake_B), True) * self.lambda_GA
     #     self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * self.lambda_B
@@ -321,14 +330,96 @@ class TrainModel(ABC):
 
     def forward(self):
         self.fake_B = self.netG_A(self.real_A)
+        image_I = self.real_A.squeeze().detach().cpu().numpy()
+        # G_A(I)
+        image_fake_B = self.fake_B.squeeze().detach().cpu().numpy()
+        channel_1_fake_B = image_fake_B[0]  # First channel
+        channel_2_fake_B = image_fake_B[1]  # Second channel
+
+        # Process remaining images
         self.fake_B_ph, self.fake_B_rc = self.standard_channelsB_basic(self.fake_B)
         self.prop_A = self.standard_prop_basic(self.fake_B_rc)
+
+        # prop_G_A_I
+        image_prop_G_A_I = self.prop_A.squeeze().detach().cpu().numpy()
+
+        # rec_A
         self.rec_A = self.netG_B(self.prop_A)
-        self.prop_B =self.standard_prop_basic(self.real_B_rc)
+        image_rec_A = self.rec_A.squeeze().detach().cpu().numpy()
+        self.prop_B = self.standard_prop_basic(self.real_B_rc)
         self.fake_A = self.netG_B(self.prop_B)
         self.rec_B = self.netG_A(self.fake_A)
-        self.rec_B_ph, self.rec_B_rc = self.standard_channelsB_basic(self.rec_B)
 
+        # Extract channels from rec_B
+        image_rec_B = self.rec_B.squeeze().detach().cpu().numpy()
+        channel_1_rec_B = image_rec_B[0]  # First channel
+        channel_2_rec_B = image_rec_B[1]  # Second channel
+
+        #image_phase = self.real_B_ph.squeeze().detach().cpu().numpy()
+        image_phase_1 = self.real_B_re_rc.squeeze().detach().cpu().numpy()
+        image_phase_2 = self.real_B_im_rc.squeeze().detach().cpu().numpy()
+        # print("image_phase_1: ", image_phase_1)
+        # print("image_phase_2: ", image_phase_2)
+        image_prop = self.prop_B.squeeze().detach().cpu().numpy()
+        image_fake_A = self.fake_A.squeeze().detach().cpu().numpy()
+        
+#         # titles = ['Intensity', 'G_A_I Channel 1', 'G_A_I Channel 2', 'H_G_A_I', 'rec_A', 'phase', 'H_phase', 'G_B_H_ph', 'rec_B Channel 1', 'rec_B Channel 2']
+#         titles = ['I', 'G_O(I)', 'G_O(I)', '|H(G_O(I)|^2', 'G_D|H(G_O(I)|^2', 'Ψ-1','Ψ-1', 'Ψ-2', '|H(Ψ)|^2', 'G_D(|H(Ψ)|^2)', 'G_O(G_D(|H(Ψ)|^2))', 'G_O(G_D(|H(Ψ)|^2))']
+                  
+#         # Create a 2x2 grid of subplots
+#         fig, axes = plt.subplots(2, 6, figsize=(3,3))
+#         images = [image_I, channel_1_fake_B, channel_2_fake_B, image_prop_G_A_I, image_rec_A, image_phase_1, image_phase_1, image_phase_2, image_prop, image_fake_A, channel_1_rec_B, channel_2_rec_B]
+
+        ssim_I_rec_A = ssim(image_I, image_rec_A, data_range=image_rec_A.max() - image_rec_A.min())
+        ssim_phase_rec_B_ch_1 = ssim(image_phase_1, image_rec_B[0], data_range=image_rec_B[0].max() - image_rec_B[0].min())
+        ssim_phase_rec_B_ch_2 = ssim(image_phase_2, image_rec_B[1], data_range=image_rec_B[1].max() - image_rec_B[1].min())
+        
+        # Calculate PSNR
+        psnr_I_rec_A = psnr(image_I, image_rec_A, data_range=image_rec_A.max() - image_rec_A.min())
+        psnr_phase_rec_B_ch_1 = psnr(image_phase_1, image_rec_B[0], data_range=image_rec_B[0].max() - image_rec_B[0].min())
+        psnr_phase_rec_B_ch_2 = psnr(image_phase_2, image_rec_B[1], data_range=image_rec_B[1].max() - image_rec_B[1].min())
+
+        # Calculate MSE
+        mse_I_rec_A = mse(image_I, image_rec_A)
+        mse_phase_rec_B_ch_1 = mse(image_phase_1, image_rec_B[0])
+        mse_phase_rec_B_ch_2 = mse(image_phase_2, image_rec_B[1])
+        
+        # Prepare text output including SSIM, PSNR, and MSE
+        fig = plt.figure(figsize=(3, 3))
+        gs = GridSpec(3, 6, figure=fig, wspace=0.2, hspace=0.1)
+
+        # Create image subplots in the first two rows
+        axes = [fig.add_subplot(gs[i, j]) for i in range(2) for j in range(6)]
+        images = [image_I, channel_1_fake_B, channel_2_fake_B, image_prop_G_A_I, image_rec_A, image_phase_1, image_phase_1, image_phase_2, image_prop, image_fake_A, channel_1_rec_B, channel_2_rec_B]
+        titles = ['I', 'G_O(I)', 'G_O(I)', '|H(G_O(I)|^2', 'G_D|H(G_O(I)|^2', 'Ψ-1','Ψ-1', 'Ψ-2', '|H(Ψ)|^2', 'G_D(|H(Ψ)|^2)', 'G_O(G_D(|H(Ψ)|^2))', 'G_O(G_D(|H(Ψ)|^2))']
+
+        for ax, img, title in zip(axes, images, titles):
+            im = ax.imshow(img, cmap='viridis')
+            ax.set_title(title, fontsize=2)  # Adjust fontsize
+            ax.axis('off')
+            plt.colorbar(im, ax=ax).remove()
+
+        # Add a subplot for text below the images
+        text_ax = fig.add_subplot(gs[2, :]) 
+        text_ax.axis('off')  
+        ssim_text = (
+            f"SSIM between I and G_D|H(G_O(I)|^2 : {ssim_I_rec_A:.4f}\n"
+            f"PSNR between I and G_D|H(G_O(I)|^2 : {psnr_I_rec_A:.2f} dB\n"
+            f"MSE between I and G_D|H(G_O(I)|^2 : {mse_I_rec_A:.2f}\n"
+            f"SSIM between Ψ-1 and G_O(G_D(|H(Ψ)|^2)) channel 1 : {ssim_phase_rec_B_ch_1:.4f}\n"
+            f"PSNR between Ψ-1 and G_O(G_D(|H(Ψ)|^2)) channel 1 : {psnr_phase_rec_B_ch_1:.2f} dB\n"
+            f"MSE between Ψ-1 and G_O(G_D(|H(Ψ)|^2)) channel 1 : {mse_phase_rec_B_ch_1:.2f}\n"
+            f"SSIM between Ψ-2 and G_O(G_D(|H(Ψ)|^2)) channel 2 : {ssim_phase_rec_B_ch_2:.4f}\n"
+            f"PSNR between Ψ-2 and G_O(G_D(|H(Ψ)|^2)) channel 2 : {psnr_phase_rec_B_ch_2:.2f} dB\n"
+            f"MSE between Ψ-2 and G_O(G_D(|H(Ψ)|^2)) channel 2 : {mse_phase_rec_B_ch_2:.2f}"
+        )
+        text_ax.text(0.5, 0.5, ssim_text, ha='center', va='center', fontsize=3, wrap=True)
+
+        plt.tight_layout(pad=0.2, h_pad=0.1, w_pad=0.05)  # Adjust padding
+        plt.savefig("detector_to_object_to_detector.png", format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        self.rec_B_ph, self.rec_B_rc = self.standard_channelsB_basic(self.rec_B)
+        
     def optimization(self):
         self.forward()
         self.set_requires_grad([self.netD_A, self.netD_B], True)
